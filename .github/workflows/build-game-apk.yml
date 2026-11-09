@@ -42,6 +42,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Download APK for emulator test
+        uses: actions/download-artifact@v4
+        with:
+          name: Bo-lac-thoi-tien-su-APK
+          path: ${{ runner.temp }}/bo-lac-thoi-tien-su-apk
+
       - name: Install and launch game in Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -53,7 +59,7 @@ jobs:
           disable-animations: true
           script: |
             set -u
-            APK="$(find "${GITHUB_WORKSPACE:-$PWD}/app/build/outputs" -name '*.apk' -print -quit)"
+            APK="$(find "${RUNNER_TEMP}/bo-lac-thoi-tien-su-apk" -name '*.apk' -print -quit)"
             echo "APK path: ${APK:-NOT_FOUND}"
             test -n "$APK" || { echo "No APK found"; exit 1; }
             mkdir -p game-test-evidence
