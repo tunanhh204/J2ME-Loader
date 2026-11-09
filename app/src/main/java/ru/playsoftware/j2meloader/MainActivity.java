@@ -22,6 +22,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.util.Log;
 import android.os.Bundle;
 import android.view.ViewConfiguration;
 import android.widget.Toast;
@@ -56,6 +57,7 @@ import static ru.playsoftware.j2meloader.util.Constants.PREF_EMULATOR_DIR;
 import static ru.playsoftware.j2meloader.util.Constants.PREF_TOOLBAR;
 
 public class MainActivity extends BaseActivity {
+	private static final String TAG = "EmbeddedGameLaunch";
 	private static final String[] STORAGE_PERMISSIONS = {Manifest.permission.WRITE_EXTERNAL_STORAGE};
 
 	private final ActivityResultLauncher<String[]> permissionsLauncher = registerForActivityResult(
@@ -119,18 +121,24 @@ public class MainActivity extends BaseActivity {
 	}
 
 	private void startEmbeddedGame() {
+		Log.i(TAG, "startEmbeddedGame requested");
 		if (embeddedLaunchStarted) return;
 		embeddedLaunchStarted = true;
 		EmbeddedGameInstaller.install(getApplication(), appListModel.getAppRepository())
 				.subscribeOn(Schedulers.io())
 				.observeOn(AndroidSchedulers.mainThread())
-				.subscribe(app -> launchEmbeddedGame(app), error -> {
+				.subscribe(app -> {
+					Log.i(TAG, "Embedded game installed; launching " + app.getTitle() + " at " + app.getPathExt());
+					launchEmbeddedGame(app);
+				}, error -> {
+					Log.e(TAG, "Embedded game installation failed", error);
 					embeddedLaunchStarted = false;
 					Toast.makeText(this, "Không thể cài game: " + error.getMessage(), Toast.LENGTH_LONG).show();
 				});
 	}
 
 	private void launchEmbeddedGame(AppItem app) {
+		Log.i(TAG, "Preparing game profile for " + app.getTitle());
 		File profileDir = new File(Config.getConfigsDir(), app.getPath());
 		if (!profileDir.exists() && !profileDir.mkdirs()) {
 			Toast.makeText(this, "Không thể tạo cấu hình game.", Toast.LENGTH_LONG).show();
@@ -144,6 +152,7 @@ public class MainActivity extends BaseActivity {
 			profile.screenHeight = 240;
 			ProfilesManager.saveConfig(profile);
 		}
+		Log.i(TAG, "Starting MicroActivity for " + app.getTitle());
 		Config.startApp(this, app.getTitle(), app.getPathExt(), false);
 		finish();
 	}
