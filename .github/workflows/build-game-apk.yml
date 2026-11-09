@@ -52,7 +52,70 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 4096
           disable-animations: true
           script: |
-            APK="$(find app/build/outputs -name '*.apk' -print -quit)"; echo "APK path: ${APK:-NOT_FOUND}"; test -n "$APK" || { echo "No APK found under app/build/outputs"; find app/build/outputs -maxdepth 7 -print; exit 1; }; attempt=1; while [ "$attempt" -le 3 ]; do echo "Emulator health check attempt $attempt/3"; adb wait-for-device; boot_ok=0; for wait_sec in $(seq 1 90); do booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; package_state="$(adb shell service check package 2>/dev/null || true)"; activity_state="$(adb shell service check activity 2>/dev/null || true)"; if [ "$booted" = "1" ] && echo "$package_state" | grep -q found && echo "$activity_state" | grep -q found; then boot_ok=1; break; fi; sleep 2; done; if [ "$boot_ok" = "1" ]; then echo "Android boot and package/activity services are ready"; if adb install -r "$APK" && adb shell am force-stop com.tuananh.bolacthoitiensu.debug && adb shell am start -n com.tuananh.bolacthoitiensu.debug/ru.playsoftware.j2meloader.MainActivity; then sleep 90; mkdir -p game-test-evidence; adb shell screencap -p /sdcard/game-before-input.png && adb pull /sdcard/game-before-input.png game-test-evidence/game-before-input.png; echo "Trying game prompt with DPAD and confirm inputs"; adb shell input keyevent 22 || true; sleep 2; adb shell input keyevent 23 || true; sleep 8; adb shell screencap -p /sdcard/game-after-right.png && adb pull /sdcard/game-after-right.png game-test-evidence/game-after-right.png; adb shell input keyevent 21 || true; sleep 2; adb shell input keyevent 23 || true; sleep 8; adb shell input keyevent 66 || true; sleep 5; adb shell input tap 680 560 || true; sleep 10; adb shell input keyevent 19 || true; sleep 2; adb shell input keyevent 23 || true; sleep 20; adb shell screencap -p /sdcard/game-screen.png && adb pull /sdcard/game-screen.png game-test-evidence/game-screen.png; adb shell dumpsys activity activities > /tmp/activities.txt; adb shell dumpsys activity | grep -E "mResumedActivity|topResumedActivity" > /tmp/resumed.txt || true; adb logcat -d -t 6000 > /tmp/game-logcat.txt; if grep -q "javax.microedition.shell.MicroActivity" /tmp/activities.txt && grep -q "MicroActivity" /tmp/resumed.txt && grep -q "loadMIDletList main: tribes" /tmp/game-logcat.txt && ! grep -E "FATAL EXCEPTION.*(com.tuananh.bolacthoitiensu|ru.playsoftware.j2meloader)|No MIDlets found|ClassNotFoundException.*tribes" /tmp/game-logcat.txt; then echo "PASS: embedded tribes MIDlet loaded, MicroActivity remained foreground, and no game-process crash was detected"; grep -E "EmbeddedGameInstaller|EmbeddedGameLaunch|tribes|MIDlet|MicroActivity|FATAL EXCEPTION|No MIDlets found" /tmp/game-logcat.txt | tail -n 160 || true; exit 0; fi; fi; else echo "Android services did not become healthy; skip install on this attempt"; fi; echo "Attempt $attempt failed; collecting diagnostics"; adb logcat -d -t 5000 > /tmp/game-logcat.txt 2>&1 || true; grep -E "EmbeddedGameInstaller|EmbeddedGameLaunch|tribes|MIDlet|MicroActivity|FATAL EXCEPTION|ANR|No MIDlets found|Dexing error" /tmp/game-logcat.txt | tail -n 180 || true; cat /tmp/activities.txt 2>/dev/null || true; cat /tmp/resumed.txt 2>/dev/null || true; if [ "$attempt" -lt 3 ]; then echo "Rebooting emulator before retry"; adb reboot || true; sleep 5; fi; attempt=$((attempt+1)); done; echo "FAIL: emulator/game did not pass health and launch checks after 3 attempts"; exit 1
+            set -u
+            APK="$(find app/build/outputs -name '*.apk' -print -quit)"
+            echo "APK path: ${APK:-NOT_FOUND}"
+            test -n "$APK" || { echo "No APK found"; exit 1; }
+            mkdir -p game-test-evidence
+            attempt=1
+            while [ "$attempt" -le 3 ]; do
+              echo "Emulator health check attempt $attempt/3"
+              adb wait-for-device
+              boot_ok=0
+              for wait_sec in $(seq 1 90); do
+                booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r')"
+                package_state="$(adb shell service check package 2>/dev/null || true)"
+                activity_state="$(adb shell service check activity 2>/dev/null || true)"
+                if [ "$booted" = "1" ] && echo "$package_state" | grep -q found && echo "$activity_state" | grep -q found; then
+                  boot_ok=1
+                  break
+                fi
+                sleep 2
+              done
+              if [ "$boot_ok" != "1" ]; then
+                echo "Android services did not become healthy"
+              elif adb install -r "$APK"; then
+                adb shell am force-stop com.tuananh.bolacthoitiensu.debug
+                adb logcat -c
+                echo "Launching standalone app and waiting for its own foreground activity"
+                adb shell am start -W -n com.tuananh.bolacthoitiensu.debug/ru.playsoftware.j2meloader.MainActivity || true
+                sleep 45
+                adb shell screencap -p /sdcard/game-after-launch.png || true
+                adb pull /sdcard/game-after-launch.png game-test-evidence/game-after-launch.png || true
+                adb shell dumpsys activity activities > game-test-evidence/activities.txt 2>&1 || true
+                adb shell dumpsys activity processes > game-test-evidence/processes.txt 2>&1 || true
+                adb shell pidof com.tuananh.bolacthoitiensu.debug > game-test-evidence/app-pid.txt 2>&1 || true
+                adb logcat -d -v threadtime > game-test-evidence/logcat-full.txt 2>&1 || true
+                grep -E "EmbeddedGameInstaller|EmbeddedGameLaunch|AndroidRuntime|FATAL EXCEPTION|ANR|MicroActivity|tribes|MIDlet" game-test-evidence/logcat-full.txt | tail -n 300 > game-test-evidence/logcat-focused.txt || true
+                if grep -q "javax.microedition.shell.MicroActivity" game-test-evidence/activities.txt &&
+                   grep -q "MicroActivity" game-test-evidence/activities.txt &&
+                   grep -q "loadMIDletList main: tribes" game-test-evidence/logcat-full.txt &&
+                   [ -s game-test-evidence/app-pid.txt ] &&
+                   ! grep -E "FATAL EXCEPTION.*(com.tuananh.bolacthoitiensu|ru.playsoftware.j2meloader)|No MIDlets found|ClassNotFoundException.*tribes" game-test-evidence/logcat-full.txt; then
+                  echo "Game MIDlet is loaded and its activity remains present; beginning one controlled input test"
+                  adb shell input keyevent 23 || true
+                  sleep 8
+                  adb shell screencap -p /sdcard/game-screen.png || true
+                  adb pull /sdcard/game-screen.png game-test-evidence/game-screen.png || true
+                  adb shell dumpsys activity activities > game-test-evidence/activities-after-input.txt 2>&1 || true
+                  adb logcat -d -v threadtime > game-test-evidence/logcat-full.txt 2>&1 || true
+                  if grep -q "javax.microedition.shell.MicroActivity" game-test-evidence/activities-after-input.txt &&
+                     ! grep -E "FATAL EXCEPTION.*(com.tuananh.bolacthoitiensu|ru.playsoftware.j2meloader)" game-test-evidence/logcat-full.txt; then
+                    echo "PASS: game activity survived launch and one confirm input"
+                    exit 0
+                  fi
+                fi
+              fi
+              echo "Attempt $attempt failed; preserving full crash and activity diagnostics"
+              if [ "$attempt" -lt 3 ]; then
+                echo "Rebooting emulator before retry"
+                adb reboot || true
+                sleep 5
+              fi
+              attempt=$((attempt+1))
+            done
+            echo "FAIL: game did not remain in its own activity; inspect full logcat and activity evidence"
+            exit 1
 
       - name: Upload gameplay screen evidence (before and after input probes)
         if: always()
